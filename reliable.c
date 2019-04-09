@@ -92,6 +92,8 @@ rel_destroy (rel_t *r)
     free(r->rec_buffer);
     // ...
 
+    free(r);
+
 }
 
 // n is the expected length of pkt
@@ -108,30 +110,33 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       return;
     } else {//Data packet
       if(pkt->seqno < r->rcvNxt + r->windowSize){
-        buffer_insert(r->rec_buffer, pkt, 0);
-        if(pkt->seqno == r->rcvNxt){//Send cumulative ack
-          buffer_node_t *head = buffer_get_first(r->rec_buffer);
-          buffer_node_t *curr = head;
-          int num = r->rcvNxt;
+        if(pkt->cksum == cksum(pkt->data, pkt->len -12)){//See if correct checksum
+          buffer_insert(r->rec_buffer, pkt, 0);
+          if(pkt->seqno == r->rcvNxt){//Send cumulative ack
+            buffer_node_t *head = buffer_get_first(r->rec_buffer);
+            buffer_node_t *curr = head;
+            int num = r->rcvNxt;
 
-          while(curr != NULL){//loop through buffer to find higest consecutive ack
-            if(buffer_contains(r->rec_buffer, num)){
-              num++;
+            while(curr != NULL){//loop through buffer to find higest consecutive ack
+              if(buffer_contains(r->rec_buffer, num)){
+                num++;
+              }
+              curr = curr->next;
             }
-            curr = curr->next;
+
+            r->rcvNxt = num + 1;//get highest consequtive seqno in rec_buffer
+            struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
+            ack->cksum = 1;
+            ack->len = 8;
+            ack->ackno = r->rcvNxt;
+            conn_sendpkt(r->c, ack, 8);//Send Ack Packet
+
           }
 
-          r->rcvNxt = num + 1;//get highest consequtive seqno in rec_buffer
-          struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
-          ack->cksum = 1;
-          ack->len = 8;
-          ack->ackno = r->rcvNxt;
-          conn_sendpkt(r->c, ack, 8);//Send Ack Packet
 
+          rel_output(r);
         }
 
-
-        rel_output(r);
       }
     }
 }
@@ -140,17 +145,17 @@ void
 rel_read (rel_t *s)
 {
     char *buf = xmalloc(12);
-    int y = 0;
+    int len = 0;
     packet_t *pck = xmalloc(sizeof(packet_t));
 
     if(s->sndNxt - s->sndUna < s->windowSize){//Still space in send Buffer?
-      y = conn_input(s->c, buf, 500);
-      if(y == -1){
+      len = conn_input(s->c, buf, 500);
+      if(len == -1){
         rel_destroy(s);
         return;
       }
-      pck->cksum = y;
-      pck->len = 12 + y;
+      pck->cksum = cksum(buf, len);
+      pck->len = 12 + len;
       pck->seqno = s->sndNxt;
       pck->ackno = 0;
       strcpy(pck->data, buf);//Make packet out of data
@@ -162,6 +167,8 @@ rel_read (rel_t *s)
       s->sndNxt++;//Window shits one to left
       conn_sendpkt(s->c, pck, pck->len);
     }
+
+    free(pck);
 
 
 }
