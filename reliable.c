@@ -102,7 +102,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
     if(n == 8){//Ack packet
       if(pkt->ackno == r->sndUna + 1){
-        //printf("ack %d\n", pkt->ackno);
+        printf("ack %d\n", pkt->ackno);
         r->sndUna++;
       }
     } else if (n == 12){//EOF
@@ -145,6 +145,9 @@ rel_read (rel_t *s)
       buffer_insert(s->send_buffer, pck, nowMs);//SendData
       s->sndNxt++;//Window shits one to left
       conn_sendpkt(s->c, pck, pck->len);
+      printf("SNDUNA %d\n", s->sndUna);
+      printf("SNDNXT %d\n", s->sndNxt);
+
     }
 
     free(pck);
@@ -185,6 +188,7 @@ rel_output (rel_t *r)
           ack->len = 8;
           ack->ackno = r->rcvNxt;
           conn_sendpkt(r->c, ack, 8);//Send Ack Packet
+          printf("Ack Sent %d\n", ack->ackno);
           free(ack);
         }
 
