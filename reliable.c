@@ -112,32 +112,11 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
       if(pkt->seqno < r->rcvNxt + r->windowSize){
         if(pkt->cksum == cksum(pkt->data, pkt->len -12)){//See if correct checksum
           buffer_insert(r->rec_buffer, pkt, 0);
-          if(pkt->seqno == r->rcvNxt){//Send cumulative ack
-            buffer_node_t *head = buffer_get_first(r->rec_buffer);
-            buffer_node_t *curr = head;
-            int num = r->rcvNxt;
-
-            while(curr != NULL){//loop through buffer to find higest consecutive ack
-              if(buffer_contains(r->rec_buffer, num)){
-                num++;
-              }
-              curr = curr->next;
-            }
-
-            r->rcvNxt = num + 1;//get highest consequtive seqno in rec_buffer
-            struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
-            ack->cksum = 1;
-            ack->len = 8;
-            ack->ackno = r->rcvNxt;
-            conn_sendpkt(r->c, ack, 8);//Send Ack Packet
-
-          }
-
-
-          rel_output(r);
         }
 
+          rel_output(r);
       }
+
     }
 }
 
@@ -163,7 +142,7 @@ rel_read (rel_t *s)
       gettimeofday(&now, NULL);
       long nowMs = now.tv_sec * 1000 + now.tv_usec / 1000;
       //printf("nowMs %ld\n", nowMs);
-      buffer_insert(s->send_buffer, pck, 0);//SendData
+      buffer_insert(s->send_buffer, pck, nowMs);//SendData
       s->sndNxt++;//Window shits one to left
       conn_sendpkt(s->c, pck, pck->len);
     }
@@ -177,16 +156,40 @@ void
 rel_output (rel_t *r)
 {
     buffer_node_t *head = buffer_get_first(r->rec_buffer);
-    buffer_node_t *curr = head;
+    buffer_node_t *current = head;
 
-    while(curr != NULL){//loop through buffer to find higest consecutive seqno
-      if(curr->packet.seqno <= r->rcvNxt){
+    while(current != NULL){
+      if(current->packet.seqno <= r->rcvNxt){
         char *data = xmalloc(12);
-        strcpy(data, curr->packet.data);
-        conn_output(r->c, curr->packet.data, curr->packet.len - 12);
+        strcpy(data, current->packet.data);
+        conn_output(r->c, current->packet.data, current->packet.len - 12);
         buffer_remove_first(r->rec_buffer);
+        free(data);
+
+
+        if(current->packet.seqno == r->rcvNxt){//Send cumulative ack
+          buffer_node_t *head = buffer_get_first(r->rec_buffer);
+          buffer_node_t *curr = head;
+          int num = r->rcvNxt;
+
+          while(curr != NULL){//loop through buffer to find higest consecutive ack
+            if(buffer_contains(r->rec_buffer, num)){
+              num++;
+            }
+            curr = curr->next;
+          }
+
+          r->rcvNxt = num + 1;//get highest consequtive seqno in rec_buffer
+          struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
+          ack->cksum = 1;
+          ack->len = 8;
+          ack->ackno = r->rcvNxt;
+          conn_sendpkt(r->c, ack, 8);//Send Ack Packet
+          free(ack);
+        }
+
       }
-      curr = curr->next;
+      current = current->next;
     }
 
 
@@ -199,7 +202,7 @@ rel_timer ()
     // all packets whose timer has expired
     rel_t *current = rel_list;
     while (current != NULL) {
-      buffer_node_t *head = buffer_get_first(current->rec_buffer);
+      buffer_node_t *head = buffer_get_first(current->send_buffer);
       buffer_node_t *curr = head;
       while(curr != NULL){//loop through buffer to find higest consecutive seqno
         struct timeval now;
