@@ -21,9 +21,7 @@ struct reliable_state {
 
     conn_t *c;			/* This is the connection object */
 
-
     /* Add your own data fields below this */
-    // ...
     buffer_t* send_buffer;
     buffer_t* rec_buffer;
     int windowSize;
@@ -31,8 +29,17 @@ struct reliable_state {
     int sndUna;
     int sndNxt;
     int rcvNxt;
+
 };
 rel_t *rel_list;
+
+void to_host(packet_t *pkt);
+void to_network(packet_t *pkt);
+void process_ack(rel_t *r, packet_t *pkt);
+void process_data(rel_t *r, packet_t *pkt);
+long get_time();
+
+
 
 /* Creates a new reliable protocol session, returns NULL on failure.
 * ss is always NULL */
@@ -60,11 +67,10 @@ const struct config_common *cc)
     rel_list->prev = &r->next;
     rel_list = r;
 
-    /* Do any other initialization you need here... */
-    // ...
+    /* Do any other initialization you need here */
     r->send_buffer = xmalloc(sizeof(buffer_t));
     r->send_buffer->head = NULL;
-    // ...
+
     r->rec_buffer = xmalloc(sizeof(buffer_t));
     r->rec_buffer->head = NULL;
 
@@ -79,13 +85,11 @@ const struct config_common *cc)
 void
 rel_destroy (rel_t *r)
 {
-    if (r->next) {
+    if (r->next)
         r->next->prev = r->prev;
-    }
     *r->prev = r->next;
     conn_destroy (r->c);
 
-    /* Free any other allocated memory here */
     buffer_clear(r->send_buffer);
     free(r->send_buffer);
     buffer_clear(r->rec_buffer);
@@ -93,133 +97,162 @@ rel_destroy (rel_t *r)
     // ...
     free(r);
 
+    /* Free any other allocated memory here */
 }
 
-// n is the expected length of pkt
+
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
-    if(n == 8){//Ack packet
-      if(ntohl(pkt->ackno) == r->sndUna + 1){
-        //printf("ack %d\n", pkt->ackno);
-        buffer_remove_first(r->send_buffer);
-        r->sndUna++;
-      }
-    } else if (n == 12){//EOF
-      rel_destroy(r);
-      return;
-    } else {//Data packet
-      if(ntohl(pkt->seqno) < r->rcvNxt + r->windowSize){
-        if(pkt->cksum == cksum(pkt->data, ntohs(pkt->len) - 12)){//See if correct checksum
-          buffer_insert(r->rec_buffer, pkt, 0);
-        }
+    to_host(pkt);
 
-          rel_output(r);
-      }
-
+    if(pkt->len < 12){
+      process_ack(r, pkt);
+    } else {
+      process_data(r, pkt);
     }
 }
+
 
 void
 rel_read (rel_t *s)
 {
-    char *buf = xmalloc(12);
-    int len = 0;
-    packet_t *pck = xmalloc(sizeof(packet_t));
+    char *buf = xmalloc(512);
+    if(s->sndNxt - s->sndUna < s->windowSize){//Space in send_buffer?
 
-    if(s->sndNxt - s->sndUna < s->windowSize){//Still space in send Buffer?
-      len = conn_input(s->c, buf, 500);
-      if(len == -1){
+      int num_bytes = conn_input(s->c, buf, 512);
+
+      if(num_bytes < 0){
         rel_destroy(s);
         return;
       }
-      pck->cksum = cksum(buf, len);
-      pck->len = htons(12 + len);
-      pck->seqno = htonl(s->sndNxt);
-      pck->ackno = 0;
-      strcpy(pck->data, buf);//Make packet out of data
-      struct timeval now;
-      gettimeofday(&now, NULL);
-      long nowMs = now.tv_sec * 1000 + now.tv_usec / 1000;
-      //printf("nowMs %ld\n", nowMs);
-      buffer_insert(s->send_buffer, pck, nowMs);//SendData
-      s->sndNxt++;//Window shits one to left
-      conn_sendpkt(s->c, pck, pck->len);
 
-      //buffer_print(s->send_buffer);
-      //printf("SNDUNA %d\n", s->sndUna);
-      //printf("SNDNXT %d\n", s->sndNxt);
+      if(num_bytes == 0){
+        return;
+      }
 
+      packet_t *pkt = xmalloc(sizeof(packet_t));//Make packet out of data
+      pkt->len = 12 + num_bytes;
+      pkt->seqno = s->sndNxt;
+      pkt->ackno = 0;
+      strcpy(pkt->data, buf);
+      printf("Sent %d\n", pkt->seqno);
+      to_network(pkt);
+      pkt->cksum = cksum((void *) pkt, num_bytes);
+      long now = get_time();
+      buffer_insert(s->send_buffer, pkt, now);
+      conn_sendpkt(s->c, pkt, num_bytes + 12);
+
+      s->sndNxt++;
     }
-
-    free(pck);
-
-
 }
 
 void
 rel_output (rel_t *r)
 {
+    if(conn_bufspace(r->c) <= 0){
+      return;
+    }
     buffer_node_t *head = buffer_get_first(r->rec_buffer);
     buffer_node_t *current = head;
 
     while(current != NULL){
-
-      if(ntohl(current->packet.seqno) <= r->rcvNxt){
-
-        if(ntohl(current->packet.seqno) == r->rcvNxt){//Send cumulative ack
-
+        packet_t pkt = current->packet;
+        if(pkt.seqno == r->rcvNxt){
           buffer_node_t *head = buffer_get_first(r->rec_buffer);
           buffer_node_t *curr = head;
           int num = r->rcvNxt;
           while(curr != NULL){//loop through buffer to find higest consecutive ack
-            if(buffer_contains(r->rec_buffer, num)){
+            if(buffer_contains(r->rec_buffer, htonl(num))){
               num++;
 
             }
             curr = curr->next;
           }
-          conn_output(r->c, current->packet.data, ntohs(current->packet.len) - 12);
-          buffer_remove_first(r->rec_buffer);
+          conn_output(r->c, &pkt.data, pkt.len - 12);
           r->rcvNxt = num;//get highest consequtive seqno in rec_buffer
           struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
-          ack->cksum = 1;
-          ack->len = htonl(8);
-          ack->ackno = htonl(r->rcvNxt);
+          ack->len = 8;
+          ack->ackno = r->rcvNxt;
+          ack->cksum = cksum((void *) ack, 8);
+          to_network(ack);
           conn_sendpkt(r->c, ack, 8);//Send Ack Packet
-          //printf("Ack Sent %d\n", ack->ackno);
-          free(ack);
-        }
-
+          buffer_remove_first(r->rec_buffer);
       }
       current = current->next;
     }
-
-
 }
 
 void
 rel_timer ()
 {
-    // Go over all reliable senders, and have them send out
-    // all packets whose timer has expired
-    rel_t *current = rel_list;
-    while (current != NULL) {
-      buffer_node_t *head = buffer_get_first(current->send_buffer);
-      buffer_node_t *curr = head;
-      while(curr != NULL){//loop through buffer to find higest consecutive seqno
-        struct timeval now;
-        gettimeofday(&now, NULL);
-        long nowMs = now.tv_sec * 1000 + now.tv_usec / 1000;
+  rel_t *current = rel_list;
+  while (current != NULL) {
+    buffer_node_t *head = buffer_get_first(current->send_buffer);
+    buffer_node_t *curr = head;
+    while(curr != NULL){//loop through buffer to find higest consecutive seqno
+      long now = get_time();
 
-        if(curr->last_retransmit - nowMs > 200){
-          conn_sendpkt(current->c, &curr->packet, 12);
-          curr->last_retransmit = 0;
-        }
-        curr = curr->next;
-
-
+      if(curr->last_retransmit - now > 200){
+        conn_sendpkt(current->c, &curr->packet, 12);
+        curr->last_retransmit = now;
       }
-      current = rel_list->next;
+      curr = curr->next;
+
+
     }
+    current = rel_list->next;
+  }
+
+}
+
+/*Convert to host byte order*/
+void
+to_host(packet_t *pkt){
+    pkt->len = ntohs(pkt->len);
+    pkt->ackno = ntohl(pkt->ackno);
+    if(pkt->len >= 12){
+      pkt->seqno = ntohl(pkt->seqno);
+    }
+}
+
+/*Convert to network byte order*/
+void
+to_network(packet_t *pkt){
+  pkt->len = htons(pkt->len);
+  pkt->ackno = htonl(pkt->ackno);
+  if(pkt->len >= 12){
+    pkt->seqno = htonl(pkt->seqno);
+  }
+}
+
+/*Process Ack packet*/
+/*Updates lowest seqno of outstanding frames and deletes packets out of send_buffer until received ack*/
+void
+process_ack(rel_t *r, packet_t *pkt){
+    if(r->sndUna < pkt->ackno){
+      r->sndUna = pkt->ackno;
+    }
+    buffer_remove(r->send_buffer, pkt->ackno);
+}
+
+/*Process data packet*/
+void
+process_data(rel_t *r, packet_t *pkt){
+    printf("rcv %d\n", pkt->seqno);
+    if(pkt->seqno < r->rcvNxt + r->windowSize){
+      if(buffer_contains(r->rec_buffer, pkt->seqno) == 0){
+        buffer_insert(r->rec_buffer, pkt, 0);
+
+        rel_output(r);
+      }
+    }
+}
+
+/*Get Timestamp in milliseconds*/
+long
+get_time(){
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    return now.tv_sec * 1000 + now.tv_usec / 1000;
 }
