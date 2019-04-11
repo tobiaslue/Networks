@@ -29,6 +29,10 @@ struct reliable_state {
     int sndUna;
     int sndNxt;
     int rcvNxt;
+    int eof_rcv;
+    int eof_in;
+    int all_ack;
+    int all_write;
 
 };
 rel_t *rel_list;
@@ -38,6 +42,7 @@ void to_network(packet_t *pkt);
 void process_ack(rel_t *r, packet_t *pkt);
 void process_data(rel_t *r, packet_t *pkt);
 long get_time();
+void try_destroy(rel_t *r);
 
 
 
@@ -79,6 +84,11 @@ const struct config_common *cc)
     r->sndUna = 1;
     r->sndNxt = 1;
     r->rcvNxt = 1;
+
+    r->eof_in = 0;
+    r->eof_rcv = 0;
+    r->all_ack = 1;
+    r->all_write = 1;
     return r;
 }
 
@@ -118,19 +128,21 @@ void
 rel_read (rel_t *s)
 {
     char *buf = xmalloc(512);
-    if(s->sndNxt - s->sndUna < s->windowSize){//Space in send_buffer?
+    while(s->sndNxt - s->sndUna < s->windowSize){//Space in send_buffer?
 
       int num_bytes = conn_input(s->c, buf, 512);
 
       if(num_bytes < 0){
-        rel_destroy(s);
+        s->eof_in = 1;
+        conn_sendpkt(s->c, NULL, 0);
+        try_destroy(s);
         return;
       }
 
       if(num_bytes == 0){
         return;
       }
-
+      s->eof_in = 0;
       packet_t *pkt = xmalloc(sizeof(packet_t));//Make packet out of data
       pkt->len = 12 + num_bytes;
       pkt->seqno = s->sndNxt;
@@ -179,8 +191,10 @@ rel_output (rel_t *r)
           conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
           buffer_remove_first(r->rec_buffer);
           if(buffer_size(r->rec_buffer) == 0){
-            rel_destroy(r);
-            return;
+            r->all_write = 1;
+            try_destroy(r);
+          } else{
+            r->all_write = 0;
           }
       }
       current = current->next;
@@ -239,9 +253,10 @@ process_ack(rel_t *r, packet_t *pkt){
     }
     buffer_remove(r->send_buffer, pkt->ackno);
     if(buffer_size(r->send_buffer) == 0){
-      rel_destroy(r);
-      return;
+      r->all_ack = 1;
+      try_destroy(r);
     }
+    r->all_ack = 0;
     rel_read(r);
 }
 
@@ -251,12 +266,11 @@ process_data(rel_t *r, packet_t *pkt){
     //printf("rcv %d\n", pkt->seqno);
     if(pkt->seqno < r->rcvNxt + r->windowSize){
       if(pkt->len == 12){
-        if(buffer_size(r->rec_buffer) == 0){
-          conn_output(r->c, NULL, 0);
-          rel_destroy(r);
-        }
-        return;
+        r->eof_rcv = 1;
+        conn_output(r->c, NULL, 0);
+        try_destroy(r);
       }
+      r->eof_rcv = 0;
       if(buffer_contains(r->rec_buffer, pkt->seqno) == 0){
         buffer_insert(r->rec_buffer, pkt, 0);
 
@@ -271,4 +285,11 @@ get_time(){
     struct timeval now;
     gettimeofday(&now, NULL);
     return now.tv_sec * 1000 + now.tv_usec / 1000;
+}
+
+void
+try_destroy(rel_t *r){
+  if(r->eof_in == 1 && r->eof_rcv == 1 && r->all_ack == 1 && r->all_write == 1){
+    rel_destroy(r);
+  }
 }
