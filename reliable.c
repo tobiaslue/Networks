@@ -42,7 +42,7 @@ void to_network(packet_t *pkt);
 void process_ack(rel_t *r, packet_t *pkt);
 void process_data(rel_t *r, packet_t *pkt);
 long get_time();
-void try_destroy(rel_t *r);
+int try_destroy(rel_t *r);
 
 
 
@@ -114,7 +114,15 @@ rel_destroy (rel_t *r)
 void
 rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 {
+
     to_host(pkt);
+    uint16_t cksum1 = pkt->cksum;
+    pkt->cksum = 0;
+    if(cksum1 != cksum((void *) pkt, n)) {
+      return;
+    }
+
+
 
     if(pkt->len < 12){
       process_ack(r, pkt);
@@ -135,22 +143,25 @@ rel_read (rel_t *s)
       if(num_bytes < 0){
         s->eof_in = 1;
         conn_sendpkt(s->c, NULL, 0);
-        try_destroy(s);
         return;
+      } else{
+        s->eof_in = 0;
       }
 
       if(num_bytes == 0){
         return;
       }
-      s->eof_in = 0;
+
       packet_t *pkt = xmalloc(sizeof(packet_t));//Make packet out of data
       pkt->len = 12 + num_bytes;
       pkt->seqno = s->sndNxt;
       pkt->ackno = 0;
       strcpy(pkt->data, buf);
       //printf("Sent %d\n", pkt->seqno);
+      pkt->cksum = 0;
+      pkt->cksum = cksum((void *) pkt, num_bytes + 12);
       to_network(pkt);
-      pkt->cksum = cksum((void *) pkt, num_bytes);
+
       long now = get_time();
       buffer_insert(s->send_buffer, pkt, now);
       conn_sendpkt(s->c, pkt, num_bytes + 12);
@@ -192,7 +203,6 @@ rel_output (rel_t *r)
           buffer_remove_first(r->rec_buffer);
           if(buffer_size(r->rec_buffer) == 0){
             r->all_write = 1;
-            try_destroy(r);
           } else{
             r->all_write = 0;
           }
@@ -219,7 +229,11 @@ rel_timer ()
 
 
     }
-    current = rel_list->next;
+    if(try_destroy(current) == 1){
+      rel_destroy(current);
+    }else{
+      current = rel_list->next;
+    }
   }
 
 }
@@ -254,10 +268,10 @@ process_ack(rel_t *r, packet_t *pkt){
     buffer_remove(r->send_buffer, pkt->ackno);
     if(buffer_size(r->send_buffer) == 0){
       r->all_ack = 1;
-      try_destroy(r);
+    } else{
+      r->all_ack = 0;
+      rel_read(r);
     }
-    r->all_ack = 0;
-    rel_read(r);
 }
 
 /*Process data packet*/
@@ -268,9 +282,10 @@ process_data(rel_t *r, packet_t *pkt){
       if(pkt->len == 12){
         r->eof_rcv = 1;
         conn_output(r->c, NULL, 0);
-        try_destroy(r);
+      } else{
+        r->eof_rcv = 0;
       }
-      r->eof_rcv = 0;
+
       if(buffer_contains(r->rec_buffer, pkt->seqno) == 0){
         buffer_insert(r->rec_buffer, pkt, 0);
 
@@ -287,9 +302,10 @@ get_time(){
     return now.tv_sec * 1000 + now.tv_usec / 1000;
 }
 
-void
+int
 try_destroy(rel_t *r){
   if(r->eof_in == 1 && r->eof_rcv == 1 && r->all_ack == 1 && r->all_write == 1){
-    rel_destroy(r);
+    return 1;
   }
+  return 0;
 }
