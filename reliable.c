@@ -89,6 +89,7 @@ const struct config_common *cc)
     r->eof_rcv = 0;
     r->all_ack = 1;
     r->all_write = 1;
+
     return r;
 }
 
