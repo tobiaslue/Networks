@@ -95,6 +95,7 @@ const struct config_common *cc)
 void
 rel_destroy (rel_t *r)
 {
+    fprintf(stderr, "destroy connection\n");
     if (r->next)
         r->next->prev = r->prev;
     *r->prev = r->next;
@@ -118,7 +119,8 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     to_host(pkt);
     uint16_t cksum1 = pkt->cksum;
     pkt->cksum = 0;
-    if(cksum1 != cksum((void *) pkt, n)) {
+    if(cksum1 != cksum((void *) pkt, pkt->len)) {
+      fprintf(stderr, "corrupt packet received\n");
       return;
     }
 
@@ -155,8 +157,9 @@ rel_read (rel_t *s)
       packet_t *pkt = xmalloc(sizeof(packet_t));//Make packet out of data
       pkt->len = 12 + num_bytes;
       pkt->seqno = s->sndNxt;
+      fprintf(stderr, "sent pkt %d\n", pkt->seqno);
       pkt->ackno = 0;
-      strcpy(pkt->data, buf);
+      memcpy(pkt->data, buf, num_bytes);
       //printf("Sent %d\n", pkt->seqno);
       pkt->cksum = 0;
       pkt->cksum = cksum((void *) pkt, num_bytes + 12);
@@ -168,6 +171,7 @@ rel_read (rel_t *s)
 
       s->sndNxt++;
     }
+    free(buf);
 }
 
 void
@@ -206,6 +210,7 @@ rel_output (rel_t *r)
           } else{
             r->all_write = 0;
           }
+          free(ack);
       }
       current = current->next;
     }
@@ -262,6 +267,7 @@ to_network(packet_t *pkt){
 /*Updates lowest seqno of outstanding frames and deletes packets out of send_buffer until received ack*/
 void
 process_ack(rel_t *r, packet_t *pkt){
+    fprintf(stderr, "received ack %d\n", pkt->ackno);
     if(r->sndUna < pkt->ackno){
       r->sndUna = pkt->ackno;
     }
@@ -278,6 +284,7 @@ process_ack(rel_t *r, packet_t *pkt){
 void
 process_data(rel_t *r, packet_t *pkt){
     //printf("rcv %d\n", pkt->seqno);
+    fprintf(stderr, "received pkt %d\n", pkt->seqno);
     if(pkt->seqno < r->rcvNxt + r->windowSize){
       if(pkt->len == 12){
         r->eof_rcv = 1;
