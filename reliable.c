@@ -25,7 +25,7 @@ struct reliable_state {
     buffer_t* send_buffer;
     buffer_t* rec_buffer;
     int windowSize;
-
+    int timeout;
     int sndUna;
     int sndNxt;
     int rcvNxt;
@@ -75,7 +75,7 @@ const struct config_common *cc)
     r->rec_buffer->head = NULL;
 
     r->windowSize = cc->window;
-
+    r->timeout = cc->timeout;
     r->sndUna = 1;
     r->sndNxt = 1;
     r->rcvNxt = 1;
@@ -136,7 +136,7 @@ rel_read (rel_t *s)
       pkt->seqno = s->sndNxt;
       pkt->ackno = 0;
       strcpy(pkt->data, buf);
-      printf("Sent %d\n", pkt->seqno);
+      //printf("Sent %d\n", pkt->seqno);
       to_network(pkt);
       pkt->cksum = cksum((void *) pkt, num_bytes);
       long now = get_time();
@@ -175,9 +175,13 @@ rel_output (rel_t *r)
           ack->len = 8;
           ack->ackno = r->rcvNxt;
           ack->cksum = cksum((void *) ack, 8);
-          to_network(ack);
-          conn_sendpkt(r->c, ack, 8);//Send Ack Packet
+          to_network((packet_t *) ack);
+          conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
           buffer_remove_first(r->rec_buffer);
+          if(buffer_size(r->rec_buffer) == 0){
+            rel_destroy(r);
+            return;
+          }
       }
       current = current->next;
     }
@@ -193,7 +197,7 @@ rel_timer ()
     while(curr != NULL){//loop through buffer to find higest consecutive seqno
       long now = get_time();
 
-      if(curr->last_retransmit - now > 200){
+      if(curr->last_retransmit - now > current->timeout){
         conn_sendpkt(current->c, &curr->packet, 12);
         curr->last_retransmit = now;
       }
@@ -234,13 +238,25 @@ process_ack(rel_t *r, packet_t *pkt){
       r->sndUna = pkt->ackno;
     }
     buffer_remove(r->send_buffer, pkt->ackno);
+    if(buffer_size(r->send_buffer) == 0){
+      rel_destroy(r);
+      return;
+    }
+    rel_read(r);
 }
 
 /*Process data packet*/
 void
 process_data(rel_t *r, packet_t *pkt){
-    printf("rcv %d\n", pkt->seqno);
+    //printf("rcv %d\n", pkt->seqno);
     if(pkt->seqno < r->rcvNxt + r->windowSize){
+      if(pkt->len == 12){
+        if(buffer_size(r->rec_buffer) == 0){
+          conn_output(r->c, NULL, 0);
+          rel_destroy(r);
+        }
+        return;
+      }
       if(buffer_contains(r->rec_buffer, pkt->seqno) == 0){
         buffer_insert(r->rec_buffer, pkt, 0);
 
