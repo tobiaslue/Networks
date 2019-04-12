@@ -159,7 +159,7 @@ rel_read (rel_t *s)
       packet_t *pkt = xmalloc(sizeof(packet_t));//Make packet out of data
       pkt->len = 12 + num_bytes;
       pkt->seqno = s->sndNxt;
-      fprintf(stderr, "sent pkt %d\n", pkt->seqno);
+      fprintf(stderr, "%4d sent pkt %d\n", getpid(), pkt->seqno);
       pkt->ackno = 0;
       memcpy(pkt->data, buf, num_bytes);
       //printf("Sent %d\n", pkt->seqno);
@@ -211,31 +211,31 @@ get_highest_seq(rel_t *r){
 
 void
 print_pkts(rel_t *r){
-  fprintf(stderr, "print_pkts\n");
+  fprintf(stderr, "%4d print_pkts\n", getpid());
   r->rcvNxt = get_highest_seq(r);
   buffer_node_t *head = buffer_get_first(r->rec_buffer);
   buffer_node_t *curr = head;
   while(curr != NULL){
     if(curr->packet.seqno <= r->rcvNxt - 1){
       conn_output(r->c, curr->packet.data, curr->packet.len - 12);
-
-      struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
-      ack->len = 8;
-      ack->ackno = r->rcvNxt;
-      ack->cksum = cksum((void *) ack, 8);
-      to_network((packet_t *) ack);
-      conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
-      buffer_remove_first(r->rec_buffer);
-      if(buffer_size(r->rec_buffer) == 0){
-        r->all_write = 1;
-      } else{
-        r->all_write = 0;
-      }
-
-      //free(ack);
     }
     curr = curr->next;
   }
+
+  struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
+  ack->len = 8;
+  ack->ackno = r->rcvNxt;
+  ack->cksum = cksum((void *) ack, 8);
+  to_network((packet_t *) ack);
+  conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
+  buffer_remove_first(r->rec_buffer);
+  if(buffer_size(r->rec_buffer) == 0){
+    r->all_write = 1;
+  } else{
+    r->all_write = 0;
+  }
+
+  //free(ack);
 
 }
 
@@ -291,7 +291,7 @@ to_network(packet_t *pkt){
 /*Updates lowest seqno of outstanding frames and deletes packets out of send_buffer until received ack*/
 void
 process_ack(rel_t *r, packet_t *pkt){
-    fprintf(stderr, "received ack %d\n", pkt->ackno);
+    fprintf(stderr, "%4d received ack %d\n", getpid(), pkt->ackno);
     if(r->sndUna < pkt->ackno){
       r->sndUna = pkt->ackno;
     }
@@ -308,7 +308,7 @@ process_ack(rel_t *r, packet_t *pkt){
 void
 process_data(rel_t *r, packet_t *pkt){
     //printf("rcv %d\n", pkt->seqno);
-    fprintf(stderr, "received pkt %d\n", pkt->seqno);
+    fprintf(stderr, "%4d received pkt %d\n", getpid(), pkt->seqno);
     if(pkt->seqno < r->rcvNxt + r->windowSize){
       if(pkt->len == 12){
         r->eof_rcv = 1;
