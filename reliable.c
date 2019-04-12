@@ -234,7 +234,14 @@ print_pkts(rel_t *r){
     r->all_write = 0;
   }
 
-  //free(ack);
+  struct ack_packet *ack = malloc(sizeof(struct ack_packet));
+  ack->len = 8;
+  ack->ackno = r->rcvNxt;
+  ack->cksum = cksum((void *) ack, 8);
+  to_network((packet_t *) ack);
+  conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
+  buffer_remove_first(r->rec_buffer);
+  free(ack);
 
 }
 
@@ -318,9 +325,10 @@ process_data(rel_t *r, packet_t *pkt){
 
       if(buffer_contains(r->rec_buffer, pkt->seqno) == 0){
         buffer_insert(r->rec_buffer, pkt, 0);
-        rel_output(r);
+        rel_output(r); // release data to application layer
+
       }
-   }
+    }  
 }
 
 /*Get Timestamp in milliseconds*/
