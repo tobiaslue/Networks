@@ -213,7 +213,7 @@ rel_output (rel_t *r)
           }
           free(ack);
       }
-      current = current->next;
+      current = buffer_get_first(r->rec_buffer);
     }
 }
 
