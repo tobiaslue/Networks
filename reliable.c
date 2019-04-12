@@ -43,7 +43,8 @@ void process_ack(rel_t *r, packet_t *pkt);
 void process_data(rel_t *r, packet_t *pkt);
 long get_time();
 int try_destroy(rel_t *r);
-
+void print_pkts(rel_t *r);
+int get_highest_seq(rel_t *r);
 
 
 /* Creates a new reliable protocol session, returns NULL on failure.
@@ -185,37 +186,58 @@ rel_output (rel_t *r)
     buffer_node_t *current = head;
 
     while(current != NULL){
-        packet_t pkt = current->packet;
-        if(pkt.seqno == r->rcvNxt){
-          buffer_node_t *head = buffer_get_first(r->rec_buffer);
-          buffer_node_t *curr = head;
-          int num = r->rcvNxt;
-          while(curr != NULL){//loop through buffer to find higest consecutive ack
-            if(buffer_contains(r->rec_buffer, htonl(num))){
-              num++;
-
-            }
-            curr = curr->next;
-          }
-          conn_output(r->c, &pkt.data, pkt.len - 12);
-          r->rcvNxt = num;//get highest consequtive seqno in rec_buffer
-          struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
-          ack->len = 8;
-          ack->ackno = r->rcvNxt;
-          ack->cksum = cksum((void *) ack, 8);
-          to_network((packet_t *) ack);
-          conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
-          buffer_remove_first(r->rec_buffer);
-          if(buffer_size(r->rec_buffer) == 0){
-            r->all_write = 1;
-          } else{
-            r->all_write = 0;
-          }
-          free(ack);
+      packet_t pkt = current->packet;
+      if(pkt.seqno == r->rcvNxt){
+        print_pkts(r);
+        return;
       }
-      current = buffer_get_first(r->rec_buffer);
+      current = current->next;
     }
 }
+
+int
+get_highest_seq(rel_t *r){
+  buffer_node_t *head = buffer_get_first(r->rec_buffer);
+  buffer_node_t *curr = head;
+  int num = r->rcvNxt;
+  while(curr != NULL){//loop through buffer to find higest consecutive ack
+    if(buffer_contains(r->rec_buffer, htonl(num))){
+      num++;
+    }
+    curr = curr->next;
+  }
+  fprintf(stderr, "num %d\n", num);
+  return num;
+}
+
+void
+print_pkts(rel_t *r){
+  r->rcvNxt = get_highest_seq(r);
+  buffer_node_t *head = buffer_get_first(r->rec_buffer);
+  buffer_node_t *curr = head;
+  while(curr != NULL){
+    if(curr->packet.seqno <= r->rcvNxt - 1){
+      conn_output(r->c, curr->packet.data, curr->packet.len - 12);
+      buffer_remove_first(r->rec_buffer);
+      struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
+      ack->len = 8;
+      ack->ackno = r->rcvNxt;
+      ack->cksum = cksum((void *) ack, 8);
+      to_network((packet_t *) ack);
+      conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
+
+      if(buffer_size(r->rec_buffer) == 0){
+        r->all_write = 1;
+      } else{
+        r->all_write = 0;
+      }
+      free(ack);
+    }
+    curr = curr->next;
+  }
+
+}
+
 
 void
 rel_timer ()
