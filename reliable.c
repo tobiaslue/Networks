@@ -176,6 +176,7 @@ rel_read (rel_t *s)
     //free(buf);
 }
 
+/*
 void
 rel_output (rel_t *r)
 {
@@ -194,6 +195,24 @@ rel_output (rel_t *r)
       current = current->next;
     }
 }
+*/
+
+void
+rel_output (rel_t *r)
+{
+    /* Your logic implementation here */
+
+    buffer_node_t *current = buffer_get_first(r->rec_buffer);
+    while (current != NULL) {
+        if (current->packet.seqno < r->rcvNxt) {
+            //printf("%s\n", current->packet.data);
+            conn_output(r->c, current->packet.data, current->packet.len-12);
+            buffer_remove_first(r->rec_buffer);
+        }
+        current = buffer_get_first(r->rec_buffer);
+    }
+}
+
 
 int
 get_highest_seq(rel_t *r){
@@ -222,13 +241,7 @@ print_pkts(rel_t *r){
     curr = curr->next;
   }
 
-  struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
-  ack->len = 8;
-  ack->ackno = r->rcvNxt;
-  ack->cksum = cksum((void *) ack, 8);
-  to_network((packet_t *) ack);
-  conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
-  buffer_remove_first(r->rec_buffer);
+
   if(buffer_size(r->rec_buffer) == 0){
     r->all_write = 1;
   } else{
@@ -320,9 +333,33 @@ process_data(rel_t *r, packet_t *pkt){
       if(buffer_contains(r->rec_buffer, pkt->seqno) == 0){
         buffer_insert(r->rec_buffer, pkt, 0);
 
-        rel_output(r);
       }
+      if(pkt->seqno == r->rcvNxt){
+        buffer_node_t *current = buffer_get_first(r->rec_buffer);
+        r->rcvNxt = current->packet.seqno + 1;
+          while (current->next != NULL) {
+              if(!buffer_contains(r->rec_buffer, ntohl(current->packet.seqno)+1)){
+                  break;
+              }
+              r->rcvNxt++;
+              current = current->next;
+          }
+
+        rel_output(r); // release data to application layer
+
+
+      }
+
     }
+
+
+    struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
+    ack->len = 8;
+    ack->ackno = r->rcvNxt;
+    ack->cksum = cksum((void *) ack, 8);
+    to_network((packet_t *) ack);
+    conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
+    buffer_remove_first(r->rec_buffer);
 }
 
 /*Get Timestamp in milliseconds*/
