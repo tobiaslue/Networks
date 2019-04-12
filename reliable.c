@@ -173,7 +173,7 @@ rel_read (rel_t *s)
 
       s->sndNxt++;
     }
-    free(buf);
+    //free(buf);
 }
 
 void
@@ -206,32 +206,33 @@ get_highest_seq(rel_t *r){
     }
     curr = curr->next;
   }
-  fprintf(stderr, "num %d\n", num);
   return num;
 }
 
 void
 print_pkts(rel_t *r){
+  fprintf(stderr, "print_pkts\n");
   r->rcvNxt = get_highest_seq(r);
   buffer_node_t *head = buffer_get_first(r->rec_buffer);
   buffer_node_t *curr = head;
   while(curr != NULL){
     if(curr->packet.seqno <= r->rcvNxt - 1){
       conn_output(r->c, curr->packet.data, curr->packet.len - 12);
-      buffer_remove_first(r->rec_buffer);
+
       struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
       ack->len = 8;
       ack->ackno = r->rcvNxt;
       ack->cksum = cksum((void *) ack, 8);
       to_network((packet_t *) ack);
       conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
-
+      buffer_remove_first(r->rec_buffer);
       if(buffer_size(r->rec_buffer) == 0){
         r->all_write = 1;
       } else{
         r->all_write = 0;
       }
-      free(ack);
+
+      //free(ack);
     }
     curr = curr->next;
   }
