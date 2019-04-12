@@ -123,7 +123,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
     pkt->cksum = 0;
     if(cksum1 != cksum((void *) pkt, pkt->len)) {
       fprintf(stderr, "corrupt packet received\n");
-      return;
+      //return;
     }
 
 
@@ -139,7 +139,7 @@ rel_recvpkt (rel_t *r, packet_t *pkt, size_t n)
 void
 rel_read (rel_t *s)
 {
-    char *buf = xmalloc(512);
+    char *buf = malloc(512);
     while(s->sndNxt - s->sndUna < s->windowSize){//Space in send_buffer?
 
       int num_bytes = conn_input(s->c, buf, 512);
@@ -156,7 +156,7 @@ rel_read (rel_t *s)
         return;
       }
 
-      packet_t *pkt = xmalloc(sizeof(packet_t));//Make packet out of data
+      packet_t *pkt = malloc(sizeof(packet_t));//Make packet out of data
       pkt->len = 12 + num_bytes;
       pkt->seqno = s->sndNxt;
       fprintf(stderr, "%4d sent pkt %d\n", getpid(), pkt->seqno);
@@ -172,8 +172,9 @@ rel_read (rel_t *s)
       conn_sendpkt(s->c, pkt, num_bytes + 12);
 
       s->sndNxt++;
+      free(pkt);
     }
-    //free(buf);
+    free(buf);
 }
 
 /*
@@ -353,13 +354,14 @@ process_data(rel_t *r, packet_t *pkt){
     }
 
 
-    struct ack_packet *ack = xmalloc(sizeof(struct ack_packet));
+    struct ack_packet *ack = malloc(sizeof(struct ack_packet));
     ack->len = 8;
     ack->ackno = r->rcvNxt;
     ack->cksum = cksum((void *) ack, 8);
     to_network((packet_t *) ack);
     conn_sendpkt(r->c, (packet_t *) ack, 8);//Send Ack Packet
     buffer_remove_first(r->rec_buffer);
+    free(ack);
 }
 
 /*Get Timestamp in milliseconds*/
